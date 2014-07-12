@@ -8,8 +8,8 @@ import std.logger.templatelogger;
 standard output. The format of the output is:
 $(D FileNameWithoutPath:FunctionNameWithoutModulePath:LineNumber Message).
 */
-class StdIOLogger : TemplateLogger!(File.LockingTextWriter, defaultFormatter, 
-    (a) => true)
+class StdIOLogger : TemplateLogger!(File.LockingTextWriter, defaultFormatter,
+    (a) => true, true)
 {
     static @trusted this()
     {

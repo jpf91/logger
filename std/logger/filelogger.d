@@ -9,8 +9,8 @@ import std.logger.templatelogger;
 file. The name of the file has to be passed on construction time. If the file
 is already present new log messages will be append at its end.
 */
-class FileLogger : TemplateLogger!(File.LockingTextWriter, defaultFormatter, 
-    (a) => true)
+class FileLogger : TemplateLogger!(File.LockingTextWriter, defaultFormatter,
+    (a) => true, true)
 {
     /** Default constructor for the $(D StdIOLogger) Logger.
 

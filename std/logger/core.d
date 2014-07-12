@@ -376,37 +376,51 @@ private string genDocComment(const bool asMemberFunction,
 private immutable formatString = q{
         import std.format : formattedWrite;
 
-        auto app = appender!string();
         foreach (arg; args)
         {
             alias A = typeof(arg);
             static if (isAggregateType!A || is(A == enum))
             {
-                std.format.formattedWrite(app, "%s", arg);
+                std.format.formattedWrite(writer, "%s", arg);
             }
             else static if (isSomeString!A)
             {
-                std.format.formattedWrite(app, "%s", arg);
+                std.format.formattedWrite(writer, "%s", arg);
             }
             else static if (isIntegral!A)
             {
-                toTextRange(arg, app);
+                toTextRange(arg, writer);
             }
             else static if (isBoolean!A)
             {
-                std.format.formattedWrite(app, "%s", arg ? "true" : "false");
+                std.format.formattedWrite(writer, "%s", arg ? "true" : "false");
             }
             else static if (isSomeChar!A)
             {
-                std.format.formattedWrite(app, "%c", arg);
+                std.format.formattedWrite(writer, "%c", arg);
             }
             else
             {
                 // Most general case
-                std.format.formattedWrite(w, "%s", arg);
+                std.format.formattedWrite(writer, "%s", arg);
             }
         }
 };
+
+private struct MsgRange
+{
+    private Logger log;
+
+    this(Logger log)
+    {
+        this.log = log;
+    }
+
+    void put(const(char)[] msg)
+    {
+        log.logMsgPart(msg);
+    }
+}
 
 private string buildLogFunction(const bool asMemberFunction,
         const bool asConditional, const bool asPrintf, const LogLevel lv,
@@ -500,12 +514,7 @@ private string buildLogFunction(const bool asMemberFunction,
 
         ret ~= firstBool ? ") {\n" : "";
 
-        if (!asPrintf)
-        {
-            ret ~= formatString;
-        }
-
-        ret ~= "\tthis.logMessage(file, line, funcName, prettyFuncName, " ~
+        ret ~= "\tthis.logHeader(file, line, funcName, prettyFuncName, " ~
             "moduleName, ";
         if (specificLogLevel)
         {
@@ -517,8 +526,18 @@ private string buildLogFunction(const bool asMemberFunction,
                 logLevelToParameterString(lv) ~ ", ";
         }
 
-        ret ~= asConditional ? "cond, " : "true, ";
-        ret ~= asPrintf ? "format(msg, args));\n" : "app.data());\n";
+        ret ~= asConditional ? "cond);\n" : "true);\n"; //Msg is send via logMsgPart
+        ret ~= "\tauto writer = MsgRange(this);\n";
+        if(asPrintf)
+        {
+            ret ~= "\timport std.format : formattedWrite;\n";
+            ret ~= "\tformattedWrite(writer, msg, args);\n";
+        }
+        else
+        {
+            ret ~= formatString;
+        }
+        ret ~= "\tthis.finishLogMsg();\n";
         if (asConditional || lv != LogLevel.unspecific || specificLogLevel)
         {
             if (lv == LogLevel.fatal)
@@ -720,6 +739,10 @@ abstract class Logger
         }
     }
 
+    //Used to construct one string from many logMsgPart strings
+    protected LoggerPayload header;
+    protected Appender!string msgAppender;
+
     /** This constructor takes a name of type $(D string), and a $(D LogLevel).
 
     Every subclass of $(D Logger) has to call this constructor from there
@@ -729,6 +752,7 @@ abstract class Logger
     */
     public this(string newName, LogLevel lv) @safe
     {
+        this.msgAppender = appender!string();
         this.logLevel = lv;
         this.name = newName;
         this.fatalLogger = delegate() {
@@ -742,15 +766,21 @@ abstract class Logger
     */
     public void writeLogMsg(ref LoggerPayload payload);
 
-    /** This method is the entry point into each logger. It compares the given
+    /** This method is the main entry point into each logger. It compares the given
     $(D LogLevel) with the $(D LogLevel) of the $(D Logger), and the global
     $(LogLevel). If the passed $(D LogLevel) is greater or equal to both the
     message, and all other parameter are passed to the abstract method
-    $(D writeLogMsg).
+    $(D writeLogMsg) later from $(D finishLogMsg) in the default implementation.
+
+    The default implementation will use an $(D std.array.appender) internally to construct
+    the message string. This means dynamic, GC memory allocation. A logger can avoid this
+    allocation by reimplementing $(D logHeader), $(D logMsgPart) and $(D finishLogMsg).
+    $(D logHeader) is always called first, followed by any number of calls to $(D logMsgPart)
+    and one call to $(D finishLogMsg).
     */
-    public void logMessage(string file, int line, string funcName,
+    public void logHeader(string file, int line, string funcName,
             string prettyFuncName, string moduleName, LogLevel logLevel,
-            bool cond, string msg)
+            bool cond)
         @trusted
     {
         version(DisableLogging)
@@ -758,9 +788,34 @@ abstract class Logger
         }
         else
         {
-            auto lp = LoggerPayload(file, line, funcName, prettyFuncName,
-                moduleName, logLevel, thisTid, Clock.currTime, msg);
-            this.writeLogMsg(lp);
+            header = LoggerPayload(file, line, funcName, prettyFuncName,
+                moduleName, logLevel, thisTid, Clock.currTime, null);
+        }
+    }
+
+    /** Logs a part of the log message. */
+    public void logMsgPart(const(char)[] msg)
+    {
+        version(DisableLogging)
+        {
+        }
+        else
+        {
+            msgAppender.put(msg);
+        }
+    }
+
+    /** Signals that the message has been written and no more calls to $(D logMsgPart) follow. */
+    public void finishLogMsg()
+    {
+        version(DisableLogging)
+        {
+        }
+        else
+        {
+            header.msg = msgAppender.data;
+            this.writeLogMsg(header);
+            msgAppender = appender!string();
         }
     }
 
